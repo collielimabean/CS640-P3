@@ -3,8 +3,9 @@ package edu.wisc.cs.sdn.vnet.rt;
 import edu.wisc.cs.sdn.vnet.Device;
 import edu.wisc.cs.sdn.vnet.DumpFile;
 import edu.wisc.cs.sdn.vnet.Iface;
-
+import net.floodlightcontroller.packet.Data;
 import net.floodlightcontroller.packet.Ethernet;
+import net.floodlightcontroller.packet.ICMP;
 import net.floodlightcontroller.packet.IPv4;
 
 /**
@@ -119,7 +120,40 @@ public class Router extends Device
         // Check TTL
         ipPacket.setTtl((byte)(ipPacket.getTtl()-1));
         if (0 == ipPacket.getTtl())
-        { return; }
+        {
+            // create ethernet header
+            Ethernet ether = new Ethernet();
+            ether.setEtherType(Ethernet.TYPE_IPv4);
+            // TODO: SRC/DEST MAC addresses
+            
+            // create IPv4 header
+            IPv4 ip = new IPv4();
+            ip.setProtocol(IPv4.PROTOCOL_ICMP);
+            ip.setTtl((byte) 64);
+            ip.setSourceAddress(ipPacket.getSourceAddress());
+            ip.setDestinationAddress(ipPacket.getDestinationAddress());
+            
+            // create ICMP metadata
+            ICMP icmp = new ICMP();
+            icmp.setIcmpType((byte) 11);
+            icmp.setIcmpCode((byte) 0);
+            
+            // prepare ICMP payload
+            byte[] rawData = new byte[4 + ipPacket.getHeaderLength() + 8];
+            System.arraycopy(serialized, 0, rawData, 4, ipPacket.getHeaderLength());
+            System.arraycopy(ipPacket.getPayload().serialize(), 0, rawData, 4 + ipPacket.getHeaderLength() - 1, 8);
+            Data data = new Data(rawData);
+            
+            // combine headers, and send it out
+            ether.setPayload(ip);
+            ip.setPayload(icmp);
+            icmp.setPayload(data);
+            RouteEntry routeEntry = this.getRouteTable().lookup(ipPacket.getSourceAddress());
+            this.sendPacket(ether, routeEntry.getInterface());
+            
+            // drop the dead packet
+            return; 
+        }
         
         // Reset checksum now that TTL is decremented
         ipPacket.resetChecksum();
