@@ -124,7 +124,12 @@ public class Router extends Device
             // create ethernet header
             Ethernet ether = new Ethernet();
             ether.setEtherType(Ethernet.TYPE_IPv4);
-            // TODO: SRC/DEST MAC addresses
+            RouteEntry bestMatch = this.getRouteTable().lookup(ipPacket.getDestinationAddress());
+            ether.setSourceMACAddress(bestMatch.getInterface().getMacAddress().toBytes());
+            ArpEntry arpEntry = this.arpCache.lookup(bestMatch.getGatewayAddress());
+            if (arpEntry == null)
+                return;
+            etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
             
             // create IPv4 header
             IPv4 ip = new IPv4();
