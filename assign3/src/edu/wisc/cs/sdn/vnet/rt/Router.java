@@ -121,42 +121,8 @@ public class Router extends Device
         ipPacket.setTtl((byte)(ipPacket.getTtl()-1));
         if (0 == ipPacket.getTtl())
         {
-            // create ethernet header
-            Ethernet ether = new Ethernet();
-            ether.setEtherType(Ethernet.TYPE_IPv4);
-            RouteEntry bestMatch = this.getRouteTable().lookup(ipPacket.getDestinationAddress());
-            ether.setSourceMACAddress(bestMatch.getInterface().getMacAddress().toBytes());
-            ArpEntry arpEntry = this.arpCache.lookup(bestMatch.getGatewayAddress());
-            if (arpEntry == null)
-                return;
-            etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
-            
-            // create IPv4 header
-            IPv4 ip = new IPv4();
-            ip.setProtocol(IPv4.PROTOCOL_ICMP);
-            ip.setTtl((byte) 64);
-            ip.setSourceAddress(ipPacket.getSourceAddress());
-            ip.setDestinationAddress(ipPacket.getDestinationAddress());
-            
-            // create ICMP metadata
-            ICMP icmp = new ICMP();
-            icmp.setIcmpType((byte) 11);
-            icmp.setIcmpCode((byte) 0);
-            
-            // prepare ICMP payload
-            byte[] rawData = new byte[4 + ipPacket.getHeaderLength() + 8];
-            System.arraycopy(serialized, 0, rawData, 4, ipPacket.getHeaderLength());
-            System.arraycopy(ipPacket.getPayload().serialize(), 0, rawData, 4 + ipPacket.getHeaderLength() - 1, 8);
-            Data data = new Data(rawData);
-            
-            // combine headers, and send it out
-            ether.setPayload(ip);
-            ip.setPayload(icmp);
-            icmp.setPayload(data);
-            RouteEntry routeEntry = this.getRouteTable().lookup(ipPacket.getSourceAddress());
-            this.sendPacket(ether, routeEntry.getInterface());
-            
-            // drop the dead packet
+            // time exceeded packet
+            this.sendIcmpPacket(11, 0, etherPacket, ipPacket, null);
             return; 
         }
         
@@ -167,13 +133,29 @@ public class Router extends Device
         for (Iface iface : this.interfaces.values())
         {
         	if (ipPacket.getDestinationAddress() == iface.getIpAddress())
-        	{ return; }
+        	{
+        	    if (ipPacket.getProtocol() == IPv4.PROTOCOL_ICMP)
+        	    {
+        	        ICMP icmpPkt = (ICMP) ipPacket.getPayload();
+        	        if (icmpPkt.getIcmpType() != ICMP.TYPE_ECHO_REQUEST)
+    	                return;
+        	        
+        	        // echo ICMP packet
+        	        this.sendIcmpPacket(0, 0, etherPacket, ipPacket, icmpPkt.getPayload().serialize());
+        	    }
+        	    else
+        	    {
+        	        // Destination port unreachable
+        	        this.sendIcmpPacket(3, 3, etherPacket, ipPacket, null);
+        	    }
+        	    return;
+    	    }
         }
 		
         // Do route lookup and forward
         this.forwardIpPacket(etherPacket, inIface);
 	}
-
+	
     private void forwardIpPacket(Ethernet etherPacket, Iface inIface)
     {
         // Make sure it's an IP packet
@@ -190,7 +172,11 @@ public class Router extends Device
 
         // If no entry matched, do nothing
         if (null == bestMatch)
-        { return; }
+        { 
+            // Destination net unreachable
+            this.sendIcmpPacket(3, 0, etherPacket, ipPacket, null);
+            return; 
+        }
 
         // Make sure we don't sent a packet back out the interface it came in
         Iface outIface = bestMatch.getInterface();
@@ -208,9 +194,70 @@ public class Router extends Device
         // Set destination MAC address in Ethernet header
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (null == arpEntry)
-        { return; }
-        etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
+        {
+            // Destination host unreachable
+            this.sendIcmpPacket(3, 1, etherPacket, ipPacket, null);
+            return;
+        }
         
+        etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
         this.sendPacket(etherPacket, outIface);
     }
+    
+    /**
+     * Generic factory method to generate & send ICMP messages.
+     * It's rather poorly written, but if it works... 
+     * @param icmpType
+     * @param icmpCode
+     * @param etherPacket
+     * @param ipPacket
+     * @param serialized null if it's not an echo ICMP reply
+     */
+    private void sendIcmpPacket(int icmpType, int icmpCode, Ethernet etherPacket, IPv4 ipPacket, byte[] serialized)
+    {
+        // create ethernet header
+        Ethernet ether = new Ethernet();
+        ether.setEtherType(Ethernet.TYPE_IPv4);
+        RouteEntry bestMatch = this.getRouteTable().lookup(ipPacket.getDestinationAddress());
+        ether.setSourceMACAddress(bestMatch.getInterface().getMacAddress().toBytes());
+        ArpEntry arpEntry = this.arpCache.lookup(bestMatch.getGatewayAddress());
+        if (arpEntry == null)
+            return;
+        etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
+        
+        // create IPv4 header
+        IPv4 ip = new IPv4();
+        ip.setProtocol(IPv4.PROTOCOL_ICMP);
+        ip.setTtl((byte) 64);
+        ip.setSourceAddress(ipPacket.getSourceAddress());
+        ip.setDestinationAddress(ipPacket.getDestinationAddress());
+        
+        // create ICMP metadata
+        ICMP icmp = new ICMP();
+        icmp.setIcmpType((byte) icmpType);
+        icmp.setIcmpCode((byte) icmpCode);
+        
+        byte[] rawData;
+        // prepare ICMP payload
+        if (serialized == null)
+        {
+            rawData = new byte[4 + ipPacket.getHeaderLength() + 8];
+            System.arraycopy(ipPacket.serialize(), 0, rawData, 4, ipPacket.getHeaderLength());
+            System.arraycopy(ipPacket.getPayload().serialize(), 0, rawData, 4 + ipPacket.getHeaderLength() - 1, 8);
+        }
+        else
+        {
+            rawData = serialized;
+        }
+        Data data = new Data(rawData);
+        
+        // combine headers, and send it out
+        ether.setPayload(ip);
+        ip.setPayload(icmp);
+        icmp.setPayload(data);
+        RouteEntry routeEntry = this.getRouteTable().lookup(ipPacket.getSourceAddress());
+        this.sendPacket(ether, routeEntry.getInterface());
+    }
+    
+
 }
