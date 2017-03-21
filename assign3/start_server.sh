@@ -1,5 +1,5 @@
 #!/bin/bash
-
+ant
 pkill java
 
 for var in "$@"

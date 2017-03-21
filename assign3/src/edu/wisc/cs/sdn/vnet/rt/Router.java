@@ -7,6 +7,7 @@ import net.floodlightcontroller.packet.Data;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.ICMP;
 import net.floodlightcontroller.packet.IPv4;
+import java.nio.ByteBuffer;
 
 /**
  * @author Aaron Gember-Jacobson and Anubhavnidhi Abhashkumar
@@ -122,7 +123,7 @@ public class Router extends Device
         if (0 == ipPacket.getTtl())
         {
             // time exceeded packet
-            this.sendIcmpPacket(11, 0, etherPacket, ipPacket, null);
+            this.sendIcmpPacket(11, 0, etherPacket, inIface, ipPacket, null);
             return; 
         }
         
@@ -141,12 +142,12 @@ public class Router extends Device
     	                return;
         	        
         	        // echo ICMP packet
-        	        this.sendIcmpPacket(0, 0, etherPacket, ipPacket, icmpPkt.getPayload().serialize());
+        	        this.sendIcmpPacket(0, 0, etherPacket, inIface, ipPacket, icmpPkt.getPayload().serialize());
         	    }
         	    else
         	    {
         	        // Destination port unreachable
-        	        this.sendIcmpPacket(3, 3, etherPacket, ipPacket, null);
+        	        this.sendIcmpPacket(3, 3, etherPacket, inIface, ipPacket, null);
         	    }
         	    return;
     	    }
@@ -172,9 +173,10 @@ public class Router extends Device
 
         // If no entry matched, do nothing
         if (null == bestMatch)
-        { 
+        {
+            System.out.println("Destination net unreachable!"); 
             // Destination net unreachable
-            this.sendIcmpPacket(3, 0, etherPacket, ipPacket, null);
+            this.sendIcmpPacket(3, 0, etherPacket, inIface, ipPacket, null);
             return; 
         }
 
@@ -196,7 +198,7 @@ public class Router extends Device
         if (null == arpEntry)
         {
             // Destination host unreachable
-            this.sendIcmpPacket(3, 1, etherPacket, ipPacket, null);
+            this.sendIcmpPacket(3, 1, etherPacket, inIface, ipPacket, null);
             return;
         }
         
@@ -205,7 +207,7 @@ public class Router extends Device
     }
     
     /**
-     * Generic factory method to generate & send ICMP messages.
+     * Generic factory method to generate and send ICMP messages.
      * It's rather poorly written, but if it works... 
      * @param icmpType
      * @param icmpCode
@@ -213,37 +215,53 @@ public class Router extends Device
      * @param ipPacket
      * @param serialized null if it's not an echo ICMP reply
      */
-    private void sendIcmpPacket(int icmpType, int icmpCode, Ethernet etherPacket, IPv4 ipPacket, byte[] serialized)
+    private void sendIcmpPacket(int icmpType, int icmpCode, Ethernet etherPacket, Iface iface, IPv4 ipPacket, byte[] serialized)
     {
         // create ethernet header
         Ethernet ether = new Ethernet();
         ether.setEtherType(Ethernet.TYPE_IPv4);
-        RouteEntry bestMatch = this.getRouteTable().lookup(ipPacket.getDestinationAddress());
+        RouteEntry bestMatch = this.getRouteTable().lookup(ipPacket.getSourceAddress());
         ether.setSourceMACAddress(bestMatch.getInterface().getMacAddress().toBytes());
-        ArpEntry arpEntry = this.arpCache.lookup(bestMatch.getGatewayAddress());
+
+        int nextHop = bestMatch.getGatewayAddress();
+        if (nextHop == 0)
+            nextHop = ipPacket.getSourceAddress();
+
+        ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (arpEntry == null)
+        {
+            System.out.println("sendIcmpPacket arpEntry fail");
             return;
-        etherPacket.setDestinationMACAddress(arpEntry.getMac().toBytes());
+        }
+        ether.setDestinationMACAddress(arpEntry.getMac().toBytes());
         
         // create IPv4 header
         IPv4 ip = new IPv4();
         ip.setProtocol(IPv4.PROTOCOL_ICMP);
         ip.setTtl((byte) 64);
-        ip.setSourceAddress(ipPacket.getSourceAddress());
-        ip.setDestinationAddress(ipPacket.getDestinationAddress());
+        ip.setSourceAddress(iface.getIpAddress());
+        ip.setDestinationAddress(ipPacket.getSourceAddress());
         
         // create ICMP metadata
         ICMP icmp = new ICMP();
         icmp.setIcmpType((byte) icmpType);
         icmp.setIcmpCode((byte) icmpCode);
         
-        byte[] rawData;
         // prepare ICMP payload
+        byte[] rawData;
         if (serialized == null)
         {
-            rawData = new byte[4 + ipPacket.getHeaderLength() + 8];
-            System.arraycopy(ipPacket.serialize(), 0, rawData, 4, ipPacket.getHeaderLength());
-            System.arraycopy(ipPacket.getPayload().serialize(), 0, rawData, 4 + ipPacket.getHeaderLength() - 1, 8);
+            int hdr_len = 4 * ipPacket.getHeaderLength();
+            byte[] ipHdr = new byte[hdr_len];
+            System.arraycopy(ipPacket.serialize(), 0, ipHdr, 0, hdr_len);
+            byte[] ipPayload = new byte[8];
+            System.arraycopy(ipPacket.getPayload().serialize(), 0, ipPayload, 0, 8);
+
+            rawData = ByteBuffer.wrap(new byte[4 + hdr_len + 8])
+                            .put(new byte[4])
+                            .put(ipHdr)
+                            .put(ipPayload)
+                            .array();
         }
         else
         {
@@ -255,9 +273,6 @@ public class Router extends Device
         ether.setPayload(ip);
         ip.setPayload(icmp);
         icmp.setPayload(data);
-        RouteEntry routeEntry = this.getRouteTable().lookup(ipPacket.getSourceAddress());
-        this.sendPacket(ether, routeEntry.getInterface());
+        this.sendPacket(ether, iface);
     }
-    
-
 }
