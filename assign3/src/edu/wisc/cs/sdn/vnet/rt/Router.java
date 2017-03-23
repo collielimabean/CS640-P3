@@ -1,13 +1,15 @@
 package edu.wisc.cs.sdn.vnet.rt;
 
+import java.nio.ByteBuffer;
+
 import edu.wisc.cs.sdn.vnet.Device;
 import edu.wisc.cs.sdn.vnet.DumpFile;
 import edu.wisc.cs.sdn.vnet.Iface;
+import net.floodlightcontroller.packet.ARP;
 import net.floodlightcontroller.packet.Data;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.ICMP;
 import net.floodlightcontroller.packet.IPv4;
-import java.nio.ByteBuffer;
 
 /**
  * @author Aaron Gember-Jacobson and Anubhavnidhi Abhashkumar
@@ -93,7 +95,9 @@ public class Router extends Device
 		case Ethernet.TYPE_IPv4:
 			this.handleIpPacket(etherPacket, inIface);
 			break;
-		// Ignore all other packet types, for now
+		case Ethernet.TYPE_ARP:
+		    this.handleArpPacket(etherPacket, inIface);
+		    break;
 		}
 		
 		/********************************************************************/
@@ -206,6 +210,55 @@ public class Router extends Device
         this.sendPacket(etherPacket, outIface);
     }
     
+    private void handleArpPacket(Ethernet etherPacket, Iface inIface)
+    {
+        
+        // Make sure it's an IP packet
+        if (etherPacket.getEtherType() != Ethernet.TYPE_ARP)
+        { return; }
+        
+        // Get IP header
+        ARP arpPacket = (ARP) etherPacket.getPayload();
+        
+        // filter for ARP requests
+        if (arpPacket.getOpCode() != ARP.OP_REQUEST)
+            return;
+        
+        // get target ip
+        int targetIp = ByteBuffer.wrap(arpPacket.getTargetProtocolAddress()).getInt();
+        
+        // only respond to ARP requests on the incoming interface
+        if (targetIp != inIface.getIpAddress())
+            return;
+        
+        Ethernet arpReply = createArpReply(etherPacket, inIface);
+        System.out.println("Sending ARP reply");
+        this.sendPacket(arpReply, inIface);
+    }
+    
+    private Ethernet createArpReply(Ethernet etherPacket, Iface inIface)
+    {
+        ARP originalArpPacket = (ARP) etherPacket.getPayload();
+        
+        Ethernet ether = new Ethernet();
+        ether.setEtherType(Ethernet.TYPE_ARP);
+        ether.setSourceMACAddress(inIface.getMacAddress().toBytes());
+        ether.setDestinationMACAddress(etherPacket.getSourceMACAddress());
+        
+        ARP arp = new ARP();
+        arp.setHardwareType(ARP.HW_TYPE_ETHERNET);
+        arp.setProtocolType(ARP.PROTO_TYPE_IP);
+        arp.setProtocolAddressLength((byte) 4);
+        arp.setOpCode(ARP.OP_REPLY);
+        arp.setHardwareAddressLength((byte) Ethernet.DATALAYER_ADDRESS_LENGTH);
+        arp.setSenderHardwareAddress(inIface.getMacAddress().toBytes());
+        arp.setSenderProtocolAddress(inIface.getIpAddress());
+        arp.setTargetHardwareAddress(originalArpPacket.getSenderHardwareAddress());
+        arp.setTargetProtocolAddress(originalArpPacket.getSenderProtocolAddress());
+        ether.setPayload(arp);
+        return ether;
+    }
+    
     /**
      * Generic factory method to generate and send ICMP messages.
      * It's rather poorly written, but if it works... 
@@ -229,10 +282,8 @@ public class Router extends Device
 
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (arpEntry == null)
-        {
-            System.out.println("sendIcmpPacket arpEntry fail");
             return;
-        }
+
         ether.setDestinationMACAddress(arpEntry.getMac().toBytes());
         
         // create IPv4 header
@@ -267,6 +318,7 @@ public class Router extends Device
         {
             rawData = serialized;
         }
+        
         Data data = new Data(rawData);
         
         // combine headers, and send it out
