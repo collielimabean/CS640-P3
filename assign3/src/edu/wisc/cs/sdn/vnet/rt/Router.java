@@ -32,6 +32,10 @@ public class Router extends Device
 	private class ArpQueue {
 		private ConcurrentHashMap<Integer, ArpQueueEntry> ipToPacketQueue;
 		
+		public ArpQueue() {
+			this.ipToPacketQueue = new ConcurrentHashMap<Integer, ArpQueueEntry>();
+		}
+		
 		private void addToQueueForIp(int ip, Ethernet packet) {
 			if (!ipToPacketQueue.containsKey(ip)) {
 				ipToPacketQueue.put(ip, new ArpQueueEntry());
@@ -313,6 +317,7 @@ public class Router extends Device
         {
             // Destination host unreachable
             //this.sendIcmpPacket(3, 1, etherPacket, inIface, ipPacket, null);
+        	System.out.println("forwardIpPacket - arpEntry null, enqueuing");
         	
         	// Enqueue
         	Ethernet arpRequest = createArpRequest(nextHop, etherPacket, inIface);
@@ -366,12 +371,14 @@ public class Router extends Device
                 // Get queue for desired ip
                 ArpQueueEntry packetQueue = this.arpQueue.getQueueForIp(senderIp);
                 if (packetQueue == null) {
+                	System.out.println("handleArpPacket Reply - packetQueue is null");
                 	return;
                 }
                 
                 // Add entry to ARP cache
                 MACAddress senderMACAddress = new MACAddress(arpPacket.getSenderHardwareAddress());
                 this.arpCache.insert(senderMACAddress, senderIp);
+                System.out.println("handleArpPacket Reply - senderMAC: " + senderMACAddress.toString() + " senderIP: " + IPv4.fromIPv4Address(senderIp));
                 
                 // Remove ip/queue from arpQueue map
                 this.arpQueue.removeIpEntry(senderIp);
@@ -495,6 +502,8 @@ public class Router extends Device
         
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (arpEntry == null) {
+        	System.out.println("Send ICMP - arpEntry null, enqueueing");
+        	
         	Ethernet arpRequest = createArpRequest(nextHop, etherPacket, iface);
         	this.arpQueue.setArpRequestForIp(nextHop, arpRequest);
         	this.arpQueue.addToQueueForIp(nextHop, etherPacket);
@@ -516,6 +525,7 @@ public class Router extends Device
     		if (System.currentTimeMillis() >= nextAttemptTime ) { 
     			if (packetQueueEntry.getAttempts() >= 3) {
     				// Drop packets
+    				System.out.println("Dropping ARP packets");
     	            for (Ethernet packet : packetQueueEntry.getPackets()) {
     	            	Iface inIface = packetQueueEntry.getInIface();
     	            	IPv4 ipPacket = (IPv4)packet.getPayload();
