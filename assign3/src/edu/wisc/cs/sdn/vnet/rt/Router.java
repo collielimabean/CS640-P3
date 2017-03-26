@@ -2,6 +2,7 @@ package edu.wisc.cs.sdn.vnet.rt;
 
 import java.nio.ByteBuffer;
 import java.util.Map.Entry;
+import java.util.ArrayList;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -142,7 +143,12 @@ public class Router extends Device
 			{
                 while (true)
                 {
-			    	arpRequestSender();
+                	try {
+                		arpRequestSender();
+                		Thread.sleep(100L);
+                	} catch (Exception e) {
+                	}
+                	
                 }
 			}
 		});
@@ -325,6 +331,7 @@ public class Router extends Device
         	// Enqueue
         	Ethernet arpRequest = createArpRequest(nextHop, etherPacket, outIface);
         	this.arpQueue.setArpRequestForIp(nextHop, arpRequest);
+        	
         	this.arpQueue.addToQueueForIp(nextHop, etherPacket);
         	this.arpQueue.setInIfaceForIp(nextHop, outIface);
         	
@@ -506,9 +513,9 @@ public class Router extends Device
         ArpEntry arpEntry = this.arpCache.lookup(nextHop);
         if (arpEntry == null) {
         	System.out.println("Send ICMP - arpEntry null, enqueueing");
-        	
         	Ethernet arpRequest = createArpRequest(nextHop, etherPacket, iface);
         	this.arpQueue.setArpRequestForIp(nextHop, arpRequest);
+        	
         	this.arpQueue.addToQueueForIp(nextHop, etherPacket);
         	this.arpQueue.setInIfaceForIp(nextHop, bestMatch.getInterface());
         	
@@ -521,6 +528,8 @@ public class Router extends Device
     }
     
     private void arpRequestSender() {
+    	ArrayList<Integer> removeKeys = new ArrayList<Integer>();
+    	
     	for (Entry<Integer, ArpQueueEntry> entry : this.arpQueue.getMap().entrySet()) {
     		ArpQueueEntry packetQueueEntry = entry.getValue();
     		long nextAttemptTime = packetQueueEntry.getLastAttempt() + 1000;
@@ -535,8 +544,10 @@ public class Router extends Device
     	            	
     	            	this.sendIcmpPacket(3, 1, packet, inIface, ipPacket, null);
     	            }
-                    arpQueue.removeIpEntry(entry.getKey());
-                    return;
+    	            
+    	            // Hack to remove bad IPs
+    	            removeKeys.add(entry.getKey());
+    	            continue;
     			}
     			
                 System.out.println("Sending ARP request for " + IPv4.fromIPv4Address(entry.getKey()));
@@ -550,6 +561,10 @@ public class Router extends Device
     			// Increment count
                 packetQueueEntry.incrementAttempts();
     		}
+    	}
+    	
+    	for (Integer ip : removeKeys) {
+    		this.arpQueue.removeIpEntry(ip);
     	}
     }
 }
