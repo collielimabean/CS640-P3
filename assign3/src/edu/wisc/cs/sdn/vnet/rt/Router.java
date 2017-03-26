@@ -453,12 +453,6 @@ public class Router extends Device
         if (nextHop == 0)
             nextHop = ipPacket.getSourceAddress();
 
-        ArpEntry arpEntry = this.arpCache.lookup(nextHop);
-        if (arpEntry == null)
-        	return;
-
-        ether.setDestinationMACAddress(arpEntry.getMac().toBytes());
-        
         // create IPv4 header
         IPv4 ip = new IPv4();
         ip.setProtocol(IPv4.PROTOCOL_ICMP);
@@ -498,7 +492,20 @@ public class Router extends Device
         ether.setPayload(ip);
         ip.setPayload(icmp);
         icmp.setPayload(data);
-        this.sendPacket(ether, iface);
+        
+        ArpEntry arpEntry = this.arpCache.lookup(nextHop);
+        if (arpEntry == null) {
+        	Ethernet arpRequest = createArpRequest(nextHop, etherPacket, iface);
+        	this.arpQueue.setArpRequestForIp(nextHop, arpRequest);
+        	this.arpQueue.addToQueueForIp(nextHop, etherPacket);
+        	this.arpQueue.setInIfaceForIp(nextHop, iface);
+        	
+        	return;
+        }
+        
+        ether.setDestinationMACAddress(arpEntry.getMac().toBytes());
+        
+        this.sendPacket(ether, iface);        
     }
     
     private void arpRequestSender() {
