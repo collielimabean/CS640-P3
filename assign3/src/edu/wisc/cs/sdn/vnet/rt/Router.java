@@ -181,7 +181,6 @@ public class Router extends Device
 		arpRequestSenderThread.start();
 		
 		this.ripRequestThread = new Thread(new Runnable() {
-			@Override
 			public void run() {
 				ripWorkerThread();
 			}
@@ -221,7 +220,7 @@ public class Router extends Device
 					0, 
 					entry.getValue().getSubnetMask(), 
 					entry.getValue(),
-					0, // TODO: should this be 1?
+					0, // TODO: should this be 1 or 0?
 					-1
 			);
 		}
@@ -316,6 +315,7 @@ public class Router extends Device
 		udp.setSourcePort(UDP.RIP_PORT);
 		udp.setDestinationPort(UDP.RIP_PORT);
 		ipPacket.setSourceAddress(outIface.getIpAddress());
+		etherPacket.setSourceMACAddress(outIface.getMacAddress().toBytes());
 		
 		if (destIp == 0 || destMac == null)
 		{
