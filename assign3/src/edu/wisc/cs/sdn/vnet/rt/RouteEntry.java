@@ -22,6 +22,10 @@ public class RouteEntry
 	 * the destination or gateway */
 	private Iface iface;
 	
+	private int distance;
+	
+	private long timeReceived;
+	
 	/**
 	 * Create a new route table entry.
 	 * @param destinationAddress destination IP address
@@ -31,12 +35,34 @@ public class RouteEntry
 	 *        be sent to reach the destination or gateway
 	 */
 	public RouteEntry(int destinationAddress, int gatewayAddress, 
-			int maskAddress, Iface iface)
+			int maskAddress, Iface iface, int distance, long timeReceived)
 	{
 		this.destinationAddress = destinationAddress;
 		this.gatewayAddress = gatewayAddress;
 		this.maskAddress = maskAddress;
 		this.iface = iface;
+		this.distance = 0;
+		this.timeReceived = timeReceived;
+	}
+	
+	public long getTimeReceived()
+	{
+		return this.timeReceived;
+	}
+	
+	public void setTimeReceived(long newTimeReceived)
+	{
+		this.timeReceived = newTimeReceived;
+	}
+	
+	public int getDistance()
+	{
+		return this.distance;
+	}
+	
+	public void setDistance(int distance)
+	{
+		this.distance = distance;
 	}
 	
 	/**
@@ -72,10 +98,11 @@ public class RouteEntry
 	
 	public String toString()
 	{
-		return String.format("%s \t%s \t%s \t%s",
+		return String.format("%s \t%s \t%s \t%s\t%d",
 				IPv4.fromIPv4Address(this.destinationAddress),
 				IPv4.fromIPv4Address(this.gatewayAddress),
 				IPv4.fromIPv4Address(this.maskAddress),
-				this.iface.getName());
+				this.iface.getName(),
+				this.distance);
 	}
 }

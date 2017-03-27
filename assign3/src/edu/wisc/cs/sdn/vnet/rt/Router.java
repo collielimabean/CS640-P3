@@ -1,8 +1,9 @@
 package edu.wisc.cs.sdn.vnet.rt;
 
 import java.nio.ByteBuffer;
-import java.util.Map.Entry;
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -13,6 +14,9 @@ import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.ICMP;
 import net.floodlightcontroller.packet.IPv4;
 import net.floodlightcontroller.packet.MACAddress;
+import net.floodlightcontroller.packet.RIPv2;
+import net.floodlightcontroller.packet.RIPv2Entry;
+import net.floodlightcontroller.packet.UDP;
 import edu.wisc.cs.sdn.vnet.Device;
 import edu.wisc.cs.sdn.vnet.DumpFile;
 import edu.wisc.cs.sdn.vnet.Iface;
@@ -143,6 +147,10 @@ public class Router extends Device
 		}
 	}
 	
+	private static final int RIP_ADDRESS = IPv4.toIPv4Address("224.0.0.9");
+	
+	private Thread ripRequestThread;
+	
 	/**
 	 * Creates a router for a specific host.
 	 * @param host hostname for the router
@@ -171,6 +179,13 @@ public class Router extends Device
 		});
 		
 		arpRequestSenderThread.start();
+		
+		this.ripRequestThread = new Thread(new Runnable() {
+			@Override
+			public void run() {
+				ripWorkerThread();
+			}
+		});
 	}
 	
 	/**
@@ -196,6 +211,50 @@ public class Router extends Device
 		System.out.println("-------------------------------------------------");
 		System.out.print(this.routeTable.toString());
 		System.out.println("-------------------------------------------------");
+	}
+	
+	public void enableRIP()
+	{
+		for (Map.Entry<String, Iface> entry : this.interfaces.entrySet())
+		{			
+			this.routeTable.insert(entry.getValue().getIpAddress(), 
+					0, 
+					entry.getValue().getSubnetMask(), 
+					entry.getValue(),
+					0, // TODO: should this be 1?
+					-1
+			);
+		}
+		
+		System.out.println("RIP initial route table initialized.");
+		System.out.println("-------------------------------------------------");
+		System.out.print(this.routeTable.toString());
+		System.out.println("-------------------------------------------------");
+		
+		// start RIP threads
+		ripRequestThread.start();
+		this.routeTable.enableRouteEntryTimeoutThread();
+	}
+	
+	private void ripWorkerThread()
+	{
+		while (true)
+		{
+			for (Iface iface : this.interfaces.values())
+			{
+				// send unsolicited request
+				this.sendPacket(this.createRIPRequest(iface, 0, null), iface);
+			}
+			
+			try 
+			{
+				Thread.sleep((long) 10e3);
+			} 
+			catch (InterruptedException e)
+			{
+				e.printStackTrace();
+			}
+		}
 	}
 	
 	/**
@@ -243,6 +302,40 @@ public class Router extends Device
 		/********************************************************************/
 	}
 	
+	private Ethernet createRIPRequest(Iface outIface, int destIp, byte[] destMac)
+	{
+		Ethernet etherPacket = new Ethernet();
+		IPv4 ipPacket = new IPv4();
+		UDP udp = new UDP();
+		
+		RIPv2 rip = new RIPv2();
+		for (RouteEntry entry : this.routeTable.getEntries())
+			rip.addEntry(new RIPv2Entry(entry.getDestinationAddress(), entry.getMaskAddress(), entry.getDistance()));
+		
+		
+		udp.setSourcePort(UDP.RIP_PORT);
+		udp.setDestinationPort(UDP.RIP_PORT);
+		ipPacket.setSourceAddress(outIface.getIpAddress());
+		
+		if (destIp == 0 || destMac == null)
+		{
+			// unsolicited
+			ipPacket.setDestinationAddress(RIP_ADDRESS);
+			etherPacket.setDestinationMACAddress("FF:FF:FF:FF:FF:FF");
+		}
+		else
+		{
+			// solicited
+			ipPacket.setDestinationAddress(destIp);
+			etherPacket.setDestinationMACAddress(destMac);
+		}
+		
+		udp.setPayload(rip);
+		ipPacket.setPayload(udp);
+		etherPacket.setPayload(ipPacket);
+		return etherPacket;
+	}
+	
 	private void handleIpPacket(Ethernet etherPacket, Iface inIface)
 	{
 		// Make sure it's an IP packet
@@ -274,6 +367,11 @@ public class Router extends Device
         // Reset checksum now that TTL is decremented
         ipPacket.resetChecksum();
         
+        // handle RIP packet. if not a RIP packet, continue
+        if (this.handleRipPacket(etherPacket, inIface))
+        	return;
+        
+        
         // Check if packet is destined for one of router's interfaces
         for (Iface iface : this.interfaces.values())
         {
@@ -299,6 +397,56 @@ public class Router extends Device
 		
         // Do route lookup and forward
         this.forwardIpPacket(etherPacket, inIface);
+	}
+	
+	private boolean handleRipPacket(Ethernet etherPacket, Iface inIface)
+	{
+		IPv4 ipPacket = (IPv4)etherPacket.getPayload();
+		if (ipPacket.getProtocol() != IPv4.PROTOCOL_UDP)
+			return false;
+		
+		UDP udp = (UDP) ipPacket.getPayload();
+    	if (udp.getDestinationPort() != UDP.RIP_PORT)
+    		return false;
+    	
+    	RIPv2 rip = (RIPv2) udp.getPayload();
+    	for (RIPv2Entry entry : rip.getEntries())
+    	{
+    		RouteEntry routeEntry = this.routeTable.lookup(entry.getAddress());
+    		if (routeEntry == null)
+    		{
+    			this.routeTable.insert(
+    					entry.getAddress(), 
+    					entry.getNextHopAddress(), 
+    					entry.getSubnetMask(), 
+    					inIface, 
+    					entry.getMetric() + 1, // TODO: +1?
+    					System.currentTimeMillis());
+    		}
+    		else
+    		{
+    			if (routeEntry.getDistance() < entry.getMetric() + 1)
+    				continue;
+    			
+    			this.routeTable.update(
+    					routeEntry.getDestinationAddress(),
+    					routeEntry.getMaskAddress(),
+    					routeEntry.getGatewayAddress(), 
+    					routeEntry.getInterface(), 
+    					entry.getMetric() + 1, // TODO: +1?
+    					System.currentTimeMillis());
+    		}
+    		
+    		// send RIP updates
+    		// if solicited, then send response
+    		if (ipPacket.getDestinationAddress() != RIP_ADDRESS)
+    		{
+        		Ethernet ePacket = this.createRIPRequest(inIface, ipPacket.getSourceAddress(), etherPacket.getSourceMACAddress());
+        		this.sendPacket(ePacket, inIface);
+    		}
+    	}
+    	
+    	return true;
 	}
 	
     private void forwardIpPacket(Ethernet etherPacket, Iface inIface)

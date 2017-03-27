@@ -4,13 +4,13 @@ import java.io.BufferedReader;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import net.floodlightcontroller.packet.IPv4;
-
 import edu.wisc.cs.sdn.vnet.Iface;
 
 /**
@@ -19,14 +19,64 @@ import edu.wisc.cs.sdn.vnet.Iface;
  */
 public class RouteTable 
 {
+	private static final int ROUTE_ENTRY_TIMEOUT = 30000;
+	
 	/** Entries in the route table */
 	private List<RouteEntry> entries; 
+	private Thread entryThread;
+	
 	
 	/**
 	 * Initialize an empty route table.
 	 */
 	public RouteTable()
-	{ this.entries = new LinkedList<RouteEntry>(); }
+	{ 
+		this.entries = new LinkedList<RouteEntry>();
+		this.entryThread = new Thread(new Runnable()
+		{
+			public void run()
+			{
+				while (true)
+				{
+					synchronized(entries)
+					{
+						Iterator<RouteEntry> itr = entries.iterator();
+						
+						while (itr.hasNext())
+						{
+							RouteEntry re = itr.next();
+							
+							// -1 denotes default populated
+							if (re.getTimeReceived() == -1) 
+								continue;
+							
+							if (System.currentTimeMillis() - re.getTimeReceived() > ROUTE_ENTRY_TIMEOUT)
+								itr.remove();
+						}
+					}
+					
+					try 
+					{
+						Thread.sleep(2000);
+					} 
+					catch (InterruptedException e) 
+					{
+						e.printStackTrace();
+					}
+				}
+			}
+		});
+	}
+	
+	public void enableRouteEntryTimeoutThread()
+	{
+		entryThread.start();
+	}
+	
+	public List<RouteEntry> getEntries()
+	{
+		return new LinkedList<RouteEntry>(this.entries);
+	}
 	
 	/**
 	 * Lookup the route entry that matches a given IP address.
@@ -143,7 +193,8 @@ public class RouteTable
 			}
 			
 			// Add an entry to the route table
-			this.insert(dstIp, gwIp, maskIp, iface);
+			// distance & time received do not matter in the static case
+			this.insert(dstIp, gwIp, maskIp, iface, 0, -1);
 		}
 	
 		// Close the file
@@ -159,9 +210,9 @@ public class RouteTable
 	 * @param iface router interface out which to send packets to reach the 
 	 *        destination or gateway
 	 */
-	public void insert(int dstIp, int gwIp, int maskIp, Iface iface)
+	public void insert(int dstIp, int gwIp, int maskIp, Iface iface, int distance, long timeReceived)
 	{
-		RouteEntry entry = new RouteEntry(dstIp, gwIp, maskIp, iface);
+		RouteEntry entry = new RouteEntry(dstIp, gwIp, maskIp, iface, distance, timeReceived);
         synchronized(this.entries)
         { 
             this.entries.add(entry);
@@ -195,7 +246,7 @@ public class RouteTable
      * @return true if a matching entry was found and updated, otherwise false
 	 */
 	public boolean update(int dstIp, int maskIp, int gwIp, 
-            Iface iface)
+            Iface iface, int distance, long timeReceived)
 	{
         synchronized(this.entries)
         {
@@ -204,6 +255,8 @@ public class RouteTable
             { return false; }
             entry.setGatewayAddress(gwIp);
             entry.setInterface(iface);
+            entry.setDistance(distance);
+            entry.setTimeReceived(timeReceived);
         }
         return true;
 	}
