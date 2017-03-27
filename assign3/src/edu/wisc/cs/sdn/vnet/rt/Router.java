@@ -311,7 +311,6 @@ public class Router extends Device
 		for (RouteEntry entry : this.routeTable.getEntries())
 			rip.addEntry(new RIPv2Entry(entry.getDestinationAddress(), entry.getMaskAddress(), entry.getDistance()));
 		
-		
 		udp.setSourcePort(UDP.RIP_PORT);
 		udp.setDestinationPort(UDP.RIP_PORT);
 		ipPacket.setSourceAddress(outIface.getIpAddress());
@@ -408,6 +407,10 @@ public class Router extends Device
 		UDP udp = (UDP) ipPacket.getPayload();
     	if (udp.getDestinationPort() != UDP.RIP_PORT)
     		return false;
+    	
+    	if (ipPacket.getDestinationAddress() != IPv4.toIPv4Address("224.0.0.9")) {
+    		return false;
+    	}
     	
     	RIPv2 rip = (RIPv2) udp.getPayload();
     	for (RIPv2Entry entry : rip.getEntries())
