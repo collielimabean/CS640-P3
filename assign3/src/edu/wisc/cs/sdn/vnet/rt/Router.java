@@ -542,6 +542,9 @@ public class Router extends Device
     	
         Ethernet ether = createICMPPacket(icmpType, icmpCode, etherPacket, iface, ipPacket, serialized);
     	
+        //System.out.println("Sending ICMP packet to (iface): " + iface.getMacAddress());
+        //System.out.println("Sending ICMP packet to (pkt dst): " + ether.getDestinationMAC());
+        
         this.sendPacket(ether, iface);        
     }
     
@@ -611,8 +614,9 @@ public class Router extends Device
         	
         	return ether;
         	*/
+
+        	ether.setDestinationMACAddress(MACAddress.valueOf("FF:FF:FF:FF:FF:FF").toBytes());
         	
-        	ether.setDestinationMACAddress(etherPacket.getSourceMACAddress());
         } else {        
         	ether.setDestinationMACAddress(arpEntry.getMac().toBytes());
         }
@@ -636,6 +640,9 @@ public class Router extends Device
     				for (Ethernet packet : packetQueueEntry.getPackets()) {
     	            	Iface inIface = packetQueueEntry.getInIface();
     	            	IPv4 ipPacket = (IPv4)packet.getPayload();
+    	            	
+    	            	//System.out.println("Sending ICMP packet to (inIface): " + inIface.getMacAddress());
+    	            	//System.out.println("Sending ICMP packet to (pkt dst): " + packet.getDestinationMAC());
     	            	
     	            	this.sendIcmpPacket(3, 1, packet, inIface, ipPacket, null);
     	            }
