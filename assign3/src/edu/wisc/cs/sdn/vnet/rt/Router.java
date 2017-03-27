@@ -61,12 +61,12 @@ public class Router extends Device
 			ipToPacketQueue.get(ip).setOutIface(outIface);
 		}
 		
-		private void setReceivedIfaceForIp(int ip, Iface receivedIface) {
+		private void setInIfaceForIp(int ip, Iface inIface) {
 			if (!ipToPacketQueue.containsKey(ip)) {
 				ipToPacketQueue.put(ip, new ArpQueueEntry());
 			}
 			
-			ipToPacketQueue.get(ip).setReceivedIface(receivedIface);
+			ipToPacketQueue.get(ip).setInIface(inIface);
 		}
 		
 		private ArpQueueEntry getQueueForIp(int ip) {
@@ -86,7 +86,7 @@ public class Router extends Device
 		private Queue<Ethernet> packets;
 		private Ethernet arpRequest;
 		private Iface outIface;
-		private Iface receivedIface;
+		private Iface inIface;
 		private int attempts;
 		private long lastAttempt;
 		
@@ -118,12 +118,12 @@ public class Router extends Device
 			this.outIface = outIface;
 		}
 		
-		private Iface getReceivedIface() {
-			return this.receivedIface;
+		private Iface getInIface() {
+			return this.inIface;
 		}
 		
-		private void setReceivedIface(Iface receivedIface) {
-			this.receivedIface = receivedIface;
+		private void setInIface(Iface inIface) {
+			this.inIface = inIface;
 		}
 		
 		private Integer getAttempts() {
@@ -349,7 +349,7 @@ public class Router extends Device
         	
         	this.arpQueue.addToQueueForIp(nextHop, etherPacket);
         	this.arpQueue.setOutIfaceForIp(nextHop, outIface);
-        	this.arpQueue.setReceivedIfaceForIp(nextHop, inIface);
+        	this.arpQueue.setInIfaceForIp(nextHop, inIface);
         	
         	return;
         }
@@ -472,6 +472,7 @@ public class Router extends Device
      */
     private void sendIcmpPacket(int icmpType, int icmpCode, Ethernet etherPacket, Iface iface, IPv4 ipPacket, byte[] serialized)
     {
+    	/*
         // create ethernet header
         Ethernet ether = new Ethernet();
         ether.setEtherType(Ethernet.TYPE_IPv4);
@@ -531,15 +532,94 @@ public class Router extends Device
         	
         	this.arpQueue.addToQueueForIp(nextHop, etherPacket);
         	this.arpQueue.setOutIfaceForIp(nextHop, bestMatch.getInterface());
-        	this.arpQueue.setReceivedIfaceForIp(nextHop, iface);
+        	this.arpQueue.setInIfaceForIp(nextHop, iface);
         	
         	return;
         }
         
         ether.setDestinationMACAddress(arpEntry.getMac().toBytes());
-        
+        */
+    	
+        Ethernet ether = createICMPPacket(icmpType, icmpCode, etherPacket, iface, ipPacket, serialized);
+    	
         this.sendPacket(ether, iface);        
     }
+    
+    private Ethernet createICMPPacket(int icmpType, int icmpCode, Ethernet etherPacket, Iface iface, IPv4 ipPacket, byte[] serialized) {
+
+        // create ethernet header
+        Ethernet ether = new Ethernet();
+        ether.setEtherType(Ethernet.TYPE_IPv4);
+        RouteEntry bestMatch = this.getRouteTable().lookup(ipPacket.getSourceAddress());
+        ether.setSourceMACAddress(bestMatch.getInterface().getMacAddress().toBytes());
+
+        int nextHop = bestMatch.getGatewayAddress();
+        if (nextHop == 0)
+            nextHop = ipPacket.getSourceAddress();
+
+        // create IPv4 header
+        IPv4 ip = new IPv4();
+        ip.setProtocol(IPv4.PROTOCOL_ICMP);
+        ip.setTtl((byte) 64);
+        ip.setSourceAddress(iface.getIpAddress());
+        ip.setDestinationAddress(ipPacket.getSourceAddress());
+        
+        // create ICMP metadata
+        ICMP icmp = new ICMP();
+        icmp.setIcmpType((byte) icmpType);
+        icmp.setIcmpCode((byte) icmpCode);
+        
+        // prepare ICMP payload
+        byte[] rawData;
+        if (serialized == null)
+        {
+            int hdr_len = 4 * ipPacket.getHeaderLength();
+            byte[] ipHdr = new byte[hdr_len];
+            System.arraycopy(ipPacket.serialize(), 0, ipHdr, 0, hdr_len);
+            byte[] ipPayload = new byte[8];
+            System.arraycopy(ipPacket.getPayload().serialize(), 0, ipPayload, 0, 8);
+
+            rawData = ByteBuffer.wrap(new byte[4 + hdr_len + 8])
+                            .put(new byte[4])
+                            .put(ipHdr)
+                            .put(ipPayload)
+                            .array();
+        }
+        else
+        {
+            rawData = serialized;
+        }
+        
+        Data data = new Data(rawData);
+        
+        // combine headers, and send it out
+        ether.setPayload(ip);
+        ip.setPayload(icmp);
+        icmp.setPayload(data);
+        
+        ArpEntry arpEntry = this.arpCache.lookup(nextHop);
+        if (arpEntry == null) {
+        	//System.out.println("Send ICMP - arpEntry null, enqueueing");
+        	
+        	/*
+        	Ethernet arpRequest = createArpRequest(nextHop, etherPacket, iface);
+        	this.arpQueue.setArpRequestForIp(nextHop, arpRequest);
+        	
+        	this.arpQueue.addToQueueForIp(nextHop, etherPacket);
+        	this.arpQueue.setOutIfaceForIp(nextHop, bestMatch.getInterface());
+        	this.arpQueue.setInIfaceForIp(nextHop, iface);
+        	
+        	return ether;
+        	*/
+        	
+        	ether.setDestinationMACAddress(etherPacket.getSourceMACAddress());
+        } else {        
+        	ether.setDestinationMACAddress(arpEntry.getMac().toBytes());
+        }
+        
+        return ether;
+    }
+    	
     
     private void arpRequestSender() {
     	ArrayList<Integer> removeKeys = new ArrayList<Integer>();
@@ -554,10 +634,10 @@ public class Router extends Device
     				//System.out.println("Dropping ARP packets");
     	            
     				for (Ethernet packet : packetQueueEntry.getPackets()) {
-    	            	Iface receivedIface = packetQueueEntry.getReceivedIface();
+    	            	Iface inIface = packetQueueEntry.getInIface();
     	            	IPv4 ipPacket = (IPv4)packet.getPayload();
     	            	
-    	            	this.sendIcmpPacket(3, 1, packet, receivedIface, ipPacket, null);
+    	            	this.sendIcmpPacket(3, 1, packet, inIface, ipPacket, null);
     	            }
     	            
     	            // Hack to remove bad IPs
