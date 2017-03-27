@@ -224,8 +224,8 @@ public class Router extends Device
 	 */
 	public void handlePacket(Ethernet etherPacket, Iface inIface)
 	{
-		System.out.println("*** -> Received packet: " +
-                etherPacket.toString().replace("\n", "\n\t"));
+		//System.out.println("*** -> Received packet: " +
+        //        etherPacket.toString().replace("\n", "\n\t"));
 		
 		/********************************************************************/
 		/* TODO: Handle packets                                             */
@@ -251,7 +251,7 @@ public class Router extends Device
 		
 		// Get IP header
 		IPv4 ipPacket = (IPv4)etherPacket.getPayload();
-        System.out.println("Handle IP packet");
+        //System.out.println("Handle IP packet");
 
         // Verify checksum
         short origCksum = ipPacket.getChecksum();
@@ -306,7 +306,7 @@ public class Router extends Device
         // Make sure it's an IP packet
 		if (etherPacket.getEtherType() != Ethernet.TYPE_IPv4)
 		{ return; }
-        System.out.println("Forward IP packet");
+        //System.out.println("Forward IP packet");
 		
 		// Get IP header
 		IPv4 ipPacket = (IPv4)etherPacket.getPayload();
@@ -382,7 +382,7 @@ public class Router extends Device
                     return;
                 
                 Ethernet arpReply = createArpReply(etherPacket, inIface);
-                System.out.println("Sending ARP reply, targetIP " + IPv4.fromIPv4Address(targetIp));
+                System.out.println("Sending ARP reply - targetIp: " + IPv4.fromIPv4Address(targetIp));
                 this.sendPacket(arpReply, inIface);
         	}
         	case ARP.OP_REPLY: {
@@ -394,7 +394,7 @@ public class Router extends Device
         		// get sender ip
         		int senderIp = ByteBuffer.wrap(arpPacket.getSenderProtocolAddress()).getInt();
                 
-                System.out.println("Receive ARP reply from " + IPv4.fromIPv4Address(senderIp));
+                System.out.println("Receive ARP reply - senderIp: " + IPv4.fromIPv4Address(senderIp));
                  
                 // Get queue for desired ip
                 ArpQueueEntry packetQueue = this.arpQueue.getQueueForIp(senderIp);
@@ -406,7 +406,7 @@ public class Router extends Device
                 // Add entry to ARP cache
                 MACAddress senderMACAddress = new MACAddress(arpPacket.getSenderHardwareAddress());
                 this.arpCache.insert(senderMACAddress, senderIp);
-                System.out.println("handleArpPacket Reply - senderMAC: " + senderMACAddress.toString() + " senderIP: " + IPv4.fromIPv4Address(senderIp));
+                System.out.println("handleArpPacket Reply - senderMAC: " + senderMACAddress.toString() + " senderIp: " + IPv4.fromIPv4Address(senderIp));
                 
                 // Remove ip/queue from arpQueue map
                 this.arpQueue.removeIpEntry(senderIp);
@@ -569,7 +569,7 @@ public class Router extends Device
     	            continue;
     			}
     			
-                System.out.println("Sending ARP request for " + IPv4.fromIPv4Address(entry.getKey()));
+                System.out.println("Sending ARP request for ip: " + IPv4.fromIPv4Address(entry.getKey()));
     
                 // Send ARP request
                 this.sendPacket(packetQueueEntry.getArpRequest(), packetQueueEntry.getOutIface());
